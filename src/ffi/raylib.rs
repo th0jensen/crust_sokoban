@@ -47,7 +47,7 @@ extern "C" {
     pub fn ClearBackground(color: Color);
     pub fn DrawRectangle(x: c_int, y: c_int, width: c_int, height: c_int, color: Color);
     // Text
-    pub fn _DrawText(text: *const c_char, x: c_int, y: c_int, size: c_int, color: Color);
+    pub fn DrawText(text: *const c_char, x: c_int, y: c_int, size: c_int, color: Color);
     pub fn TextFormat(text: *const c_char, ...) -> *const c_char;
     // Timing
     pub fn SetTargetFPS(fps: c_int);

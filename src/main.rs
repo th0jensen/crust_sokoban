@@ -20,11 +20,12 @@ unsafe extern "C" fn main() {
     println!("starting program...");
 
     InitWindow(800, 600, c"Crusty Sokoban".as_ptr());
-    SetTargetFPS(10);
+    SetTargetFPS(60);
     let mut game = Game::new();
     while !WindowShouldClose() {
-        keyboard::listener(&mut game);
-
+        if (*game).playing {
+            keyboard::listener(&mut game);
+        }
         BeginDrawing();
         ClearBackground(Color::hex(0x181818FF));
         game::render(game);
@@ -34,7 +35,7 @@ unsafe extern "C" fn main() {
     println!("shutting down...");
     Game::destroy(game);
     CloseWindow();
-    exit(1);
+    exit(0);
 }
 
 use core::panic::PanicInfo;

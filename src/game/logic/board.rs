@@ -2,7 +2,11 @@ use crate::{
     ffi::raylib::{GetScreenHeight, GetScreenWidth},
     game::{
         consts::{CELL_HEIGHT, CELL_WIDTH},
-        logic::{Cell, CellType},
+        logic::{
+            Cell,
+            CellBase::{Floor, Goal, Wall},
+            CellEntity::{Box, None, Player},
+        },
     },
     structs::{append, Array, Vector2},
 };
@@ -19,7 +23,14 @@ pub unsafe fn get_cells(board: *mut Board) -> *mut Cells {
 }
 
 impl Board {
-    pub unsafe fn new(rows: i32, cols: i32, start_pos: Vector2, boxes: Array<Vector2>) -> Self {
+    pub unsafe fn new(
+        rows: i32,
+        cols: i32,
+        start_pos: Vector2,
+        boxes: Array<Vector2>,
+        goals: Array<Vector2>,
+        walls: Array<Vector2>,
+    ) -> Self {
         let mut outer: Array<Array<Cell>> = Array::new();
         let pos_x = (GetScreenWidth() - (cols * CELL_WIDTH + (cols - 1))) / 2;
         let pos_y = (GetScreenHeight() - (rows * CELL_HEIGHT + (rows - 1))) / 2;
@@ -29,24 +40,25 @@ impl Board {
         for r in 0..rows {
             let mut inner: Array<Cell> = Array::new();
             for c in 0..cols {
-                let mut has_box = false;
+                let pos = Vector2::new(c, r);
 
-                for i in 0..boxes.count {
-                    let box_pos = *boxes.items.add(i);
-                    if box_pos.x == c && box_pos.y == r {
-                        has_box = true;
-                        break;
-                    }
-                }
-
-                let cell = if r == start_pos.y && c == start_pos.x {
-                    Cell::new(Vector2::new(x, y), CellType::Player)
-                } else if has_box {
-                    Cell::new(Vector2::new(x, y), CellType::Box)
+                let base = if has_pos(goals, pos) {
+                    Goal
+                } else if has_pos(walls, pos) {
+                    Wall
                 } else {
-                    Cell::new(Vector2::new(x, y), CellType::Empty)
+                    Floor
                 };
-                append(&mut inner, cell);
+
+                let entity = if r == start_pos.y && c == start_pos.x {
+                    Player
+                } else if has_pos(boxes, pos) {
+                    Box
+                } else {
+                    None
+                };
+
+                append(&mut inner, Cell::new(Vector2::new(x, y), base, entity));
                 x += CELL_WIDTH + 1;
             }
             append(&mut outer, inner);
@@ -56,4 +68,28 @@ impl Board {
 
         Self { cells: outer }
     }
+
+    pub unsafe fn destroy(board: *mut Self) {
+        if board.is_null() {
+            return;
+        }
+
+        let cells = &mut (*board).cells;
+        for i in 0..cells.count {
+            let row = cells.items.add(i);
+            Array::destroy(row);
+        }
+
+        Array::destroy(cells);
+    }
+}
+
+unsafe fn has_pos(arr: Array<Vector2>, vec: Vector2) -> bool {
+    for i in 0..arr.count {
+        let current_pos = *arr.items.add(i);
+        if current_pos.x == vec.x && current_pos.y == vec.y {
+            return true;
+        }
+    }
+    false
 }

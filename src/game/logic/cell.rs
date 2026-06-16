@@ -8,24 +8,32 @@ pub struct Cell {
     pub width: i32,
     pub height: i32,
     pub vec: Vector2,
-    pub cell_type: CellType,
+    pub base: CellBase,
+    pub entity: CellEntity,
 }
 
 impl Cell {
-    pub unsafe fn new(vec: Vector2, cell_type: CellType) -> Self {
+    pub unsafe fn new(vec: Vector2, base: CellBase, entity: CellEntity) -> Self {
         Self {
             width: CELL_WIDTH,
             height: CELL_HEIGHT,
             vec,
-            cell_type,
+            base,
+            entity,
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum CellType {
-    Empty,
-    Box,
-    Player,
+pub enum CellBase {
+    Floor,
+    Wall,
     Goal,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CellEntity {
+    None,
+    Player,
+    Box,
 }

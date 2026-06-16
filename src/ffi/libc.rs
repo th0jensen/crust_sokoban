@@ -2,6 +2,7 @@ use core::ffi::c_void;
 extern "C" {
     pub fn exit(sig: i32);
     pub fn rand() -> i32;
+    pub fn srand(seed: u32);
 
     #[link_name = "malloc"]
     fn c_malloc(size: usize) -> *mut c_void;
