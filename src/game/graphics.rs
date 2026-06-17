@@ -48,12 +48,6 @@ pub unsafe fn render(game: *mut Game) {
                 ),
                 None => {}
             };
-
-            let size = match cell.entity {
-                Player => CELL_SIZE - 5,
-                Box => CELL_SIZE - 5,
-                None => CELL_SIZE,
-            };
         }
     }
 
