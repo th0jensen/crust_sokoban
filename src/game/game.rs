@@ -9,7 +9,7 @@ use crate::{
         },
         Difficulty::Easy,
     },
-    structs::{append, Array, Vector2},
+    structs::{append, pop, Array, Vector2},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -45,6 +45,7 @@ pub struct Game {
     pub top_score: i32,
     pub playing: bool,
     pub board: *mut Board,
+    pub undo_stack: *mut UndoStack,
 }
 
 impl Game {
@@ -59,6 +60,7 @@ impl Game {
             top_score: goals.count as i32,
             playing: true,
             board: board_ptr,
+            undo_stack: UndoStack::new(),
         };
 
         Array::destroy(&mut boxes);
@@ -77,6 +79,13 @@ impl Game {
             Board::destroy((*game).board);
             free((*game).board);
             (*game).board = core::ptr::null_mut();
+        }
+
+        if !(*game).undo_stack.is_null() {
+            let undo_stack = (*game).undo_stack;
+            Array::destroy(&mut (*undo_stack).stack);
+            free(undo_stack);
+            (*game).undo_stack = core::ptr::null_mut();
         }
 
         free(game);
@@ -123,15 +132,13 @@ unsafe fn random_index(max: usize) -> usize {
 }
 
 unsafe fn clamp(value: i32, min: i32, max: i32) -> i32 {
-    if value < min {
-        return min;
-    }
-
-    if value > max {
-        return max;
-    }
-
-    value
+    return if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    };
 }
 
 unsafe fn pick_weighted(
@@ -261,6 +268,10 @@ pub unsafe fn get_board(game: *mut Game) -> *mut Board {
     (*game).board
 }
 
+pub unsafe fn get_undo_stack(game: *mut Game) -> *mut UndoStack {
+    (*game).undo_stack
+}
+
 pub unsafe fn get_cell(cells: Cells, vec: Vector2) -> *mut Cell {
     let row = &cells.items.add(vec.y as usize).read();
     row.items.add(vec.x as usize)
@@ -320,14 +331,14 @@ pub unsafe fn try_push_box(
     player_pos: Vector2,
     box_pos: Vector2,
     delta: Vector2,
-) -> bool {
+) -> (bool, Option<Vector2>) {
     let mut end = box_pos;
 
     loop {
         end = Vector2::new(end.x + delta.x, end.y + delta.y);
 
         if !in_bounds(cells, end) {
-            return false;
+            return (false, Option::None);
         }
 
         let cell = get_cell(cells, end);
@@ -337,7 +348,7 @@ pub unsafe fn try_push_box(
         }
 
         if (*cell).entity != Box {
-            return false;
+            return (false, Option::None);
         }
     }
 
@@ -349,7 +360,7 @@ pub unsafe fn try_push_box(
     (*first_box).entity = Player;
     (*player).entity = None;
 
-    true
+    (true, Some(end))
 }
 
 pub unsafe fn move_player(game: *mut Game, dir: Direction) {
@@ -368,18 +379,102 @@ pub unsafe fn move_player(game: *mut Game, dir: Direction) {
 
     if (*target).entity == None {
         try_move_player(cells, player_pos, target_pos);
+        UndoStack::push(
+            (*game).undo_stack,
+            PlayerMove {
+                delta,
+                pushed: false,
+                box_to: Vector2::new(0, 0),
+            },
+        );
+
         return;
     }
 
     if (*target).entity == Box {
-        if try_push_box(cells, player_pos, target_pos, delta) {
+        let (ok, end_pos) = try_push_box(cells, player_pos, target_pos, delta);
+        if ok {
+            let box_to = match end_pos {
+                Some(pos) => pos,
+                Option::None => return,
+            };
+
             (*game).score = check_score(cells);
+            UndoStack::push(
+                (*game).undo_stack,
+                PlayerMove {
+                    delta,
+                    pushed: true,
+                    box_to,
+                },
+            );
         };
+
         if (*game).score == (*game).top_score {
             (*game).playing = false;
         }
         return;
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct UndoStack {
+    pub stack: Array<PlayerMove>,
+}
+
+impl UndoStack {
+    pub unsafe fn new() -> *mut Self {
+        let undo_stack_ptr = malloc(size_of::<UndoStack>());
+        let arr: Array<PlayerMove> = Array::new();
+        *undo_stack_ptr = Self { stack: arr };
+
+        undo_stack_ptr
+    }
+
+    pub unsafe fn push(undo_stack: *mut UndoStack, mv: PlayerMove) {
+        append(&mut (*undo_stack).stack, mv);
+    }
+
+    pub unsafe fn pop(undo_stack: *mut UndoStack) -> PlayerMove {
+        pop(&mut (*undo_stack).stack)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PlayerMove {
+    delta: Vector2,
+    pushed: bool,
+    box_to: Vector2,
+}
+
+pub unsafe fn undo_move(game: *mut Game) {
+    if (*get_undo_stack(game)).stack.count < 1 {
+        return;
+    }
+
+    let latest_move = UndoStack::pop(get_undo_stack(game));
+    let cells = *get_cells(get_board(game));
+    let player = find_player(cells);
+    let prev_player = Vector2::new(
+        player.x - latest_move.delta.x,
+        player.y - latest_move.delta.y,
+    );
+
+    let curr = get_cell(cells, player);
+    let prev = get_cell(cells, prev_player);
+
+    if !latest_move.pushed {
+        (*prev).entity = Player;
+        (*curr).entity = None;
+    } else {
+        let box_to = get_cell(cells, latest_move.box_to);
+        (*prev).entity = Player;
+        (*curr).entity = Box;
+        (*box_to).entity = None;
+    }
+
+    (*game).score = check_score(cells);
+    (*game).playing = true;
 }
 
 unsafe fn check_score(cells: Cells) -> i32 {

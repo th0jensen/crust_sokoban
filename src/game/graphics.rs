@@ -2,7 +2,7 @@ use crate::{
     ffi::raylib::{Color, DrawRectangle, DrawText, TextFormat},
     game::{
         consts::{BOX_COLOR, CELL_COLOR, CELL_SIZE, GOAL_COLOR, PLAYER_COLOR, WALL_COLOR},
-        get_board,
+        get_board, get_undo_stack,
         logic::{
             get_cells,
             CellBase::{Floor, Goal, Wall},
@@ -28,7 +28,7 @@ pub unsafe fn render(game: *mut Game) {
 
             DrawRectangle(cell.vec.x, cell.vec.y, CELL_SIZE, CELL_SIZE, base_color);
 
-            let inset = 4;
+            let inset = 2;
             let entity_size = CELL_SIZE - inset * 2;
 
             match cell.entity {
@@ -55,9 +55,19 @@ pub unsafe fn render(game: *mut Game) {
     let score = (*game).score;
     let top_score = (*game).top_score;
     DrawText(
-        TextFormat(c"Score %i/%i".as_ptr(), score, top_score),
+        TextFormat(c"Score: %i/%i".as_ptr(), score, top_score),
         2,
         2,
+        20,
+        Color::hex(0xEFEFEFFF),
+    );
+
+    // Draw moves
+    let moves = (*get_undo_stack(game)).stack.count;
+    DrawText(
+        TextFormat(c"Moves: %i".as_ptr(), moves),
+        2,
+        2 + 20 + 2,
         20,
         Color::hex(0xEFEFEFFF),
     );

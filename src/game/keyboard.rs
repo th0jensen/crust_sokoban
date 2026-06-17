@@ -13,6 +13,8 @@ pub unsafe fn listener(game: *mut *mut Game, diff: Difficulty) {
             game::move_player(*game, Direction::Down);
         } else if IsKeyPressed(Keyboard::KeyD) {
             game::move_player(*game, Direction::Right);
+        } else if IsKeyPressed(Keyboard::KeyU) {
+            game::undo_move(*game);
         }
     }
 
