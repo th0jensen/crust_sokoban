@@ -1,7 +1,7 @@
 use crate::{
     ffi::raylib::{GetScreenHeight, GetScreenWidth},
     game::{
-        consts::{CELL_HEIGHT, CELL_WIDTH},
+        consts::CELL_SIZE,
         logic::{
             Cell,
             CellBase::{Floor, Goal, Wall},
@@ -32,8 +32,8 @@ impl Board {
         walls: Array<Vector2>,
     ) -> Self {
         let mut outer: Array<Array<Cell>> = Array::new();
-        let pos_x = (GetScreenWidth() - (cols * CELL_WIDTH + (cols - 1))) / 2;
-        let pos_y = (GetScreenHeight() - (rows * CELL_HEIGHT + (rows - 1))) / 2;
+        let pos_x = (GetScreenWidth() - (cols * CELL_SIZE + (cols - 1))) / 2;
+        let pos_y = (GetScreenHeight() - (rows * CELL_SIZE + (rows - 1))) / 2;
         let mut x: i32 = pos_x;
         let mut y: i32 = pos_y;
 
@@ -59,11 +59,11 @@ impl Board {
                 };
 
                 append(&mut inner, Cell::new(Vector2::new(x, y), base, entity));
-                x += CELL_WIDTH + 1;
+                x += CELL_SIZE + 1;
             }
             append(&mut outer, inner);
             x = pos_x;
-            y += CELL_HEIGHT + 1;
+            y += CELL_SIZE + 1;
         }
 
         Self { cells: outer }

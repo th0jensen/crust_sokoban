@@ -1,13 +1,43 @@
 use crate::{
-    ffi::libc::{free, malloc},
-    game::logic::{
-        get_cells, Board, Cell,
-        CellBase::{Goal, Wall},
-        CellEntity::{Box, None, Player},
-        Cells,
+    ffi::libc::{free, malloc, rand, strcmp},
+    game::{
+        logic::{
+            get_cells, Board, Cell,
+            CellBase::{Goal, Wall},
+            CellEntity::{Box, None, Player},
+            Cells,
+        },
+        Difficulty::Easy,
     },
     structs::{append, Array, Vector2},
 };
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Difficulty {
+    Easy = 5,
+    Medium = 7,
+    Hard = 9,
+    Impossible = 11,
+}
+
+impl Difficulty {
+    pub unsafe fn from(input: *const i8) -> Self {
+        if strcmp(input, c"easy".as_ptr()) == 0 {
+            return Difficulty::Easy;
+        }
+        if strcmp(input, c"medium".as_ptr()) == 0 {
+            return Difficulty::Medium;
+        }
+        if strcmp(input, c"hard".as_ptr()) == 0 {
+            return Difficulty::Hard;
+        }
+        if strcmp(input, c"impossible".as_ptr()) == 0 {
+            return Difficulty::Impossible;
+        }
+
+        Difficulty::Easy
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Game {
@@ -18,26 +48,22 @@ pub struct Game {
 }
 
 impl Game {
-    pub unsafe fn new() -> *mut Self {
+    pub unsafe fn new(diff: Difficulty) -> *mut Self {
         let game_ptr = malloc(size_of::<Game>());
         let board_ptr = malloc(size_of::<Board>());
 
-        let start_pos = Vector2::new(2, 2);
-        let mut boxes: Array<Vector2> = Array::new();
-        let mut goals: Array<Vector2> = Array::new();
-        let mut walls: Array<Vector2> = Array::new();
-
-        generate_boxes(&mut boxes);
-        generate_goals(&mut goals);
-        generate_walls(&mut walls);
-
-        *board_ptr = Board::new(5, 5, start_pos, boxes, goals, walls);
+        let (player, mut boxes, mut goals, mut walls) = gen_board(diff);
+        *board_ptr = Board::new(diff as i32, diff as i32, player, boxes, goals, walls);
         *game_ptr = Self {
             score: 0,
             top_score: goals.count as i32,
             playing: true,
             board: board_ptr,
         };
+
+        Array::destroy(&mut boxes);
+        Array::destroy(&mut goals);
+        Array::destroy(&mut walls);
 
         game_ptr
     }
@@ -57,21 +83,174 @@ impl Game {
     }
 }
 
-pub unsafe fn generate_boxes(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
+pub unsafe fn gen_board(
+    diff: Difficulty,
+) -> (Vector2, Array<Vector2>, Array<Vector2>, Array<Vector2>) {
+    let size = diff as i32;
+    let box_count = (size + 1) / 2;
+    let wall_count = if diff == Easy { (size + 1) / 2 } else { size };
+
+    let (mut boxes, mut goals, mut walls, mut pool) =
+        (Array::new(), Array::new(), Array::new(), Array::new());
+
+    for y in 0..size {
+        for x in 0..size {
+            append(&mut pool, Vector2::new(x, y));
+        }
+    }
+
+    let player = pick_weighted(&mut pool, size, flat_weight);
+
+    for _ in 0..wall_count {
+        append(&mut walls, pick_weighted(&mut pool, size, edge_weight));
+    }
+
+    for _ in 0..box_count {
+        append(&mut boxes, pick_weighted(&mut pool, size, center_weight));
+    }
+
+    for _ in 0..box_count {
+        append(&mut goals, pick_weighted(&mut pool, size, edge_weight));
+    }
+
+    Array::destroy(&mut pool);
+
+    (player, boxes, goals, walls)
+}
+
+unsafe fn random_index(max: usize) -> usize {
+    (rand() as usize) % max
+}
+
+unsafe fn clamp(value: i32, min: i32, max: i32) -> i32 {
+    if value < min {
+        return min;
+    }
+
+    if value > max {
+        return max;
+    }
+
+    value
+}
+
+unsafe fn pick_weighted(
+    pool: *mut Array<Vector2>,
+    size: i32,
+    weight_fn: unsafe fn(Vector2, i32) -> i32,
+) -> Vector2 {
+    let mut total_weight = 0;
+
+    for i in 0..(*pool).count {
+        let pos = *(*pool).items.add(i);
+        total_weight += clamp(weight_fn(pos, size), 0, size * size);
+    }
+
+    let mut roll = rand() % total_weight;
+
+    for i in 0..(*pool).count {
+        let pos = *(*pool).items.add(i);
+        let weight = clamp(weight_fn(pos, size), 0, size * size);
+
+        if roll < weight {
+            let picked = pos;
+
+            let last_index = (*pool).count - 1;
+            *(*pool).items.add(i) = *(*pool).items.add(last_index);
+            (*pool).count -= 1;
+
+            return picked;
+        }
+
+        roll -= weight;
+    }
+
+    let picked = *(*pool).items.add(0);
+    (*pool).count -= 1;
+    picked
+}
+
+unsafe fn flat_weight(_pos: Vector2, _size: i32) -> i32 {
+    1
+}
+
+unsafe fn edge_weight(pos: Vector2, size: i32) -> i32 {
+    let left = pos.x;
+    let right = size - 1 - pos.x;
+    let top = pos.y;
+    let bot = size - 1 - pos.y;
+
+    let mut edge_dist = left;
+    if right < edge_dist {
+        edge_dist = right;
+    };
+    if top < edge_dist {
+        edge_dist = top;
+    };
+    if bot < edge_dist {
+        edge_dist = bot;
+    };
+
+    let w = size - edge_dist;
+    w * w
+}
+
+unsafe fn center_weight(pos: Vector2, size: i32) -> i32 {
+    let center = size / 2;
+
+    if pos.x == 0 || pos.y == 0 || pos.x == size - 1 || pos.y == size - 1 {
+        return 0;
+    }
+
+    let dx = if pos.x > center {
+        pos.x - center
+    } else {
+        center - pos.x
+    };
+    let dy = if pos.y > center {
+        pos.y - center
+    } else {
+        center - pos.y
+    };
+
+    let dist = dx + dy;
+    let w = size - dist;
+    w * w
+}
+
+unsafe fn shuffle(arr: *mut Array<Vector2>) {
+    if (*arr).count < 2 {
+        return;
+    }
+
+    for i in 0..(*arr).count {
+        let remaining = (*arr).count - i;
+        let j = i + random_index(remaining);
+
+        let a = (*arr).items.add(i);
+        let b = (*arr).items.add(j);
+
+        let tmp = *a;
+        *a = *b;
+        *b = tmp;
+    }
+}
+
+pub unsafe fn gen_boxes(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
     append(arr, Vector2::new(1, 3));
     append(arr, Vector2::new(3, 2));
     append(arr, Vector2::new(3, 3));
     return arr;
 }
 
-pub unsafe fn generate_goals(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
+pub unsafe fn gen_goals(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
     append(arr, Vector2::new(0, 2));
     append(arr, Vector2::new(3, 4));
     append(arr, Vector2::new(4, 3));
     return arr;
 }
 
-pub unsafe fn generate_walls(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
+pub unsafe fn gen_walls(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
     append(arr, Vector2::new(0, 1));
     append(arr, Vector2::new(0, 3));
     append(arr, Vector2::new(0, 0));

@@ -1,9 +1,9 @@
 use crate::{
     ffi::raylib::{IsKeyPressed, Keyboard},
-    game::{game, Direction, Game},
+    game::{game, Difficulty, Direction, Game},
 };
 
-pub unsafe fn listener(game: *mut *mut Game) {
+pub unsafe fn listener(game: *mut *mut Game, diff: Difficulty) {
     if (*(*game)).playing {
         if IsKeyPressed(Keyboard::KeyW) {
             game::move_player(*game, Direction::Up);
@@ -16,8 +16,8 @@ pub unsafe fn listener(game: *mut *mut Game) {
         }
     }
 
-    if IsKeyPressed(Keyboard::KeyEnter) {
+    if IsKeyPressed(Keyboard::KeyEnter) || IsKeyPressed(Keyboard::KeySpace) {
         Game::destroy(*game);
-        *game = Game::new()
+        *game = Game::new(diff)
     }
 }

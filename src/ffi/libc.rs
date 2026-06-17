@@ -1,8 +1,11 @@
 use core::ffi::c_void;
 extern "C" {
-    pub fn exit(sig: i32);
+    pub fn exit(sig: i32) -> !;
     pub fn rand() -> i32;
     pub fn srand(seed: u32);
+    pub fn time(t: *mut isize) -> isize;
+    pub fn strcmp(a: *const i8, b: *const i8) -> i32;
+    pub fn ceil(x: f64) -> f64;
 
     #[link_name = "malloc"]
     fn c_malloc(size: usize) -> *mut c_void;
@@ -15,7 +18,7 @@ extern "C" {
 #[macro_export]
 macro_rules! c_concat {
     ($($s:literal),+ $(,)?) => {
-        concat!($($s),*, "\0").as_ptr() as *const core::ffi::c_char
+        concat!($($s),*, "\0").as_ptr() as *const i8
     };
 }
 
@@ -24,7 +27,7 @@ macro_rules! printf {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {{
         unsafe {
             extern "C" {
-                fn printf(fmt: *const core::ffi::c_char, ...) -> i32;
+                fn printf(fmt: *const i8, ...) -> i32;
             }
             printf($crate::c_concat!($fmt) $(, $arg)*)
         }
@@ -36,7 +39,7 @@ macro_rules! println {
     ($fmt:literal $(, $arg:expr)* $(,)?) => {{
         unsafe {
             extern "C" {
-                fn printf(fmt: *const core::ffi::c_char, ...) -> i32;
+                fn printf(fmt: *const i8, ...) -> i32;
             }
             printf($crate::c_concat!($fmt, "\n") $(, $arg)*)
         }

@@ -1,7 +1,7 @@
 use crate::{
     ffi::raylib::{Color, DrawRectangle, DrawText, TextFormat},
     game::{
-        consts::{BOX_COLOR, CELL_COLOR, GOAL_COLOR, PLAYER_COLOR, WALL_COLOR},
+        consts::{BOX_COLOR, CELL_COLOR, CELL_SIZE, GOAL_COLOR, PLAYER_COLOR, WALL_COLOR},
         get_board,
         logic::{
             get_cells,
@@ -20,17 +20,40 @@ pub unsafe fn render(game: *mut Game) {
         for j in 0..inner_array.count {
             let cell = *inner_array.items.add(j);
 
-            let color = match cell.entity {
-                Player => Color::hex(PLAYER_COLOR),
-                Box => Color::hex(BOX_COLOR),
-                None => match cell.base {
-                    Floor => Color::hex(CELL_COLOR),
-                    Wall => Color::hex(WALL_COLOR),
-                    Goal => Color::hex(GOAL_COLOR),
-                },
+            let base_color = match cell.base {
+                Floor => Color::hex(CELL_COLOR),
+                Wall => Color::hex(WALL_COLOR),
+                Goal => Color::hex(GOAL_COLOR),
             };
 
-            DrawRectangle(cell.vec.x, cell.vec.y, cell.width, cell.height, color);
+            DrawRectangle(cell.vec.x, cell.vec.y, CELL_SIZE, CELL_SIZE, base_color);
+
+            let inset = 4;
+            let entity_size = CELL_SIZE - inset * 2;
+
+            match cell.entity {
+                Player => DrawRectangle(
+                    cell.vec.x + inset,
+                    cell.vec.y + inset,
+                    entity_size,
+                    entity_size,
+                    Color::hex(PLAYER_COLOR),
+                ),
+                Box => DrawRectangle(
+                    cell.vec.x + inset,
+                    cell.vec.y + inset,
+                    entity_size,
+                    entity_size,
+                    Color::hex(BOX_COLOR),
+                ),
+                None => {}
+            };
+
+            let size = match cell.entity {
+                Player => CELL_SIZE - 5,
+                Box => CELL_SIZE - 5,
+                None => CELL_SIZE,
+            };
         }
     }
 
