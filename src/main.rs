@@ -87,3 +87,7 @@ use core::{ffi::c_char, panic::PanicInfo, ptr::null_mut};
 unsafe fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
+
+#[cfg(target_os = "linux")]
+#[no_mangle]
+extern "C" fn rust_eh_personality() {}
