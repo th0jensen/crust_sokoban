@@ -1,7 +1,7 @@
 use crate::{
-    ffi::raylib::{Color, DrawRectangle, DrawText, TextFormat},
+    ffi::raylib::{Color, DrawRectangle, DrawText, GetScreenHeight, TextFormat},
     game::{
-        consts::{BOX_COLOR, CELL_COLOR, CELL_SIZE, GOAL_COLOR, PLAYER_COLOR, WALL_COLOR},
+        consts::*,
         get_board, get_undo_stack,
         logic::{
             get_cells,
@@ -10,9 +10,23 @@ use crate::{
         },
         Game,
     },
+    State,
 };
 
-pub unsafe fn render(game: *mut Game) {
+pub unsafe fn render(game: *mut Game, state: *mut State) {
+    if game.is_null() {
+        if (*state).loading {
+            DrawText(
+                c"Loading...".as_ptr(),
+                2,
+                GetScreenHeight() - 22,
+                20,
+                Color::hex(TEXT_COLOR),
+            );
+        }
+        return;
+    }
+
     // Draw board
     let cells = *get_cells(get_board(game));
     for i in 0..cells.count {
@@ -23,7 +37,11 @@ pub unsafe fn render(game: *mut Game) {
             let base_color = match cell.base {
                 Floor => Color::hex(CELL_COLOR),
                 Wall => Color::hex(WALL_COLOR),
-                Goal => Color::hex(GOAL_COLOR),
+                Goal => match cell.entity {
+                    None => Color::hex(GOAL_COLOR),
+                    Player => Color::hex(GOAL_COLOR),
+                    Box => Color::hex(GOAL_SUCCESS_COLOR),
+                },
             };
 
             DrawRectangle(cell.vec.x, cell.vec.y, CELL_SIZE, CELL_SIZE, base_color);
@@ -44,7 +62,11 @@ pub unsafe fn render(game: *mut Game) {
                     cell.vec.y + inset,
                     entity_size,
                     entity_size,
-                    Color::hex(BOX_COLOR),
+                    match cell.base {
+                        Floor => Color::hex(BOX_COLOR),
+                        Goal => Color::hex(BOX_SUCCESS_COLOR),
+                        Wall => Color::hex(BOX_COLOR),
+                    },
                 ),
                 None => {}
             };
@@ -59,16 +81,27 @@ pub unsafe fn render(game: *mut Game) {
         2,
         2,
         20,
-        Color::hex(0xEFEFEFFF),
+        Color::hex(TEXT_COLOR),
     );
 
     // Draw moves
     let moves = (*get_undo_stack(game)).stack.count;
+    let top_moves = (*game).top_moves;
     DrawText(
-        TextFormat(c"Moves: %i".as_ptr(), moves),
+        TextFormat(c"Moves: %i/%i".as_ptr(), moves, top_moves),
         2,
         2 + 20 + 2,
         20,
-        Color::hex(0xEFEFEFFF),
+        Color::hex(TEXT_COLOR),
     );
+
+    if (*state).loading {
+        DrawText(
+            c"Loading...".as_ptr(),
+            2,
+            GetScreenHeight() - (20 + 2),
+            20,
+            Color::hex(TEXT_COLOR),
+        );
+    }
 }

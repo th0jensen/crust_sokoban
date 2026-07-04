@@ -5,3 +5,4 @@ mod logic;
 pub use game::*;
 pub use graphics::*;
 pub mod keyboard;
+mod solver;

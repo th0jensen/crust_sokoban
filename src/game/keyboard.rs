@@ -1,9 +1,34 @@
 use crate::{
     ffi::raylib::{IsKeyPressed, Keyboard},
-    game::{game, Difficulty, Direction, Game},
+    game::{game, Difficulty, Direction, Game, Size},
+    State,
 };
 
-pub unsafe fn listener(game: *mut *mut Game, diff: Difficulty) {
+pub unsafe fn listener(
+    game: *mut *mut Game,
+    state: *mut State,
+    _size: Size,
+    _difficulty: Difficulty,
+) -> bool {
+    if (*state).loading || (*game).is_null() {
+        return false;
+    }
+
+    if IsKeyPressed(Keyboard::KeyBackspace) {
+        game::restart_level(*game);
+        return false;
+    }
+
+    if IsKeyPressed(Keyboard::KeyR) {
+        game::play_solution(*game);
+        return false;
+    }
+
+    if (*(*game)).solution_playing {
+        game::step_solution(*game);
+        return false;
+    }
+
     if (*(*game)).playing {
         if IsKeyPressed(Keyboard::KeyW) {
             game::move_player(*game, Direction::Up);
@@ -19,7 +44,9 @@ pub unsafe fn listener(game: *mut *mut Game, diff: Difficulty) {
     }
 
     if IsKeyPressed(Keyboard::KeyEnter) || IsKeyPressed(Keyboard::KeySpace) {
-        Game::destroy(*game);
-        *game = Game::new(diff)
+        (*state).loading = true;
+        return true;
     }
+
+    false
 }

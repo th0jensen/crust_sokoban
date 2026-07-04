@@ -7,17 +7,18 @@ use crate::{
             CellEntity::{Box, None, Player},
             Cells,
         },
-        Difficulty::Easy,
+        solver::solve,
     },
     structs::{append, pop, Array, Vector2},
+    State,
 };
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Difficulty {
-    Easy = 5,
-    Medium = 7,
-    Hard = 9,
-    Impossible = 11,
+    Easy,
+    Medium,
+    Hard,
+    Impossible,
 }
 
 impl Difficulty {
@@ -37,35 +38,155 @@ impl Difficulty {
 
         Difficulty::Easy
     }
+
+    unsafe fn box_count(self, size: i32) -> i32 {
+        let requested = match self {
+            Difficulty::Easy => 2,
+            Difficulty::Medium => 3,
+            Difficulty::Hard => 4,
+            Difficulty::Impossible => 5,
+        };
+        let max_inner_cells = (size - 2) * (size - 2);
+
+        clamp(requested, 1, max_inner_cells)
+    }
+
+    unsafe fn wall_count(self, size: i32) -> i32 {
+        match self {
+            Difficulty::Easy => (size + 1) / 2,
+            Difficulty::Medium => size,
+            Difficulty::Hard => size + (size / 2),
+            Difficulty::Impossible => size * 2,
+        }
+    }
+
+    unsafe fn min_wall_count(self, size: i32) -> i32 {
+        match self {
+            Difficulty::Easy => size / 3,
+            Difficulty::Medium => (size + 1) / 2,
+            Difficulty::Hard => size,
+            Difficulty::Impossible => size + (size / 2),
+        }
+    }
+
+    unsafe fn min_pushes(self, size: i32) -> i32 {
+        match self {
+            Difficulty::Easy => 1,
+            Difficulty::Medium => size,
+            Difficulty::Hard => size * 2,
+            Difficulty::Impossible => size * 3,
+        }
+    }
+
+    unsafe fn max_pushes(self, size: i32) -> i32 {
+        match self {
+            Difficulty::Easy => size + 2,
+            Difficulty::Medium => (size * 2) + 4,
+            Difficulty::Hard => size * 4,
+            Difficulty::Impossible => size * 8,
+        }
+    }
+
+    unsafe fn min_solver_steps(self) -> i32 {
+        match self {
+            Difficulty::Easy => 0,
+            Difficulty::Medium => 500,
+            Difficulty::Hard => 2_000,
+            Difficulty::Impossible => 5_000,
+        }
+    }
+
+    unsafe fn max_solver_steps(self) -> i32 {
+        match self {
+            Difficulty::Easy => 500,
+            Difficulty::Medium => 2_000,
+            Difficulty::Hard => 5_000,
+            Difficulty::Impossible => 20_000,
+        }
+    }
+
+    unsafe fn max_optimization_attempts(self) -> i32 {
+        match self {
+            Difficulty::Easy => 8,
+            Difficulty::Medium => 16,
+            Difficulty::Hard => 24,
+            Difficulty::Impossible => 32,
+        }
+    }
+
+    unsafe fn accepts_solver_steps(self, steps: i32) -> bool {
+        steps >= self.min_solver_steps() && steps <= self.max_solver_steps()
+    }
+
+    unsafe fn accepts_pushes(self, size: i32, pushes: i32) -> bool {
+        pushes >= self.min_pushes(size) && pushes <= self.max_pushes(size)
+    }
+
+    unsafe fn accepts_wall_count(self, size: i32, wall_count: usize) -> bool {
+        (wall_count as i32) >= self.min_wall_count(size)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Size {
+    Small = 5,
+    Medium = 7,
+    Large = 9,
+    Gigantic = 11,
+}
+
+impl Size {
+    pub unsafe fn from(input: *const i8) -> Self {
+        if strcmp(input, c"small".as_ptr()) == 0 {
+            return Size::Small;
+        }
+        if strcmp(input, c"medium".as_ptr()) == 0 {
+            return Size::Medium;
+        }
+        if strcmp(input, c"large".as_ptr()) == 0 {
+            return Size::Large;
+        }
+        if strcmp(input, c"gigantic".as_ptr()) == 0 {
+            return Size::Gigantic;
+        }
+
+        Size::Small
+    }
 }
 
 #[derive(Clone, Copy)]
 pub struct Game {
     pub score: i32,
     pub top_score: i32,
+    pub top_moves: i32,
     pub playing: bool,
     pub board: *mut Board,
     pub undo_stack: *mut UndoStack,
+    pub solution: Array<Vector2>,
+    pub solution_index: usize,
+    pub solution_tick: i32,
+    pub solution_playing: bool,
 }
 
 impl Game {
-    pub unsafe fn new(diff: Difficulty) -> *mut Self {
+    pub unsafe fn new(size: Size, difficulty: Difficulty, state: *mut State) -> *mut Self {
         let game_ptr = malloc(size_of::<Game>());
-        let board_ptr = malloc(size_of::<Board>());
+        (*state).loading = true;
+        let (board, goals, top_moves, solution) = gen_board_and_solve(size, difficulty);
+        (*state).loading = false;
 
-        let (player, mut boxes, mut goals, mut walls) = gen_board(diff);
-        *board_ptr = Board::new(diff as i32, diff as i32, player, boxes, goals, walls);
         *game_ptr = Self {
             score: 0,
-            top_score: goals.count as i32,
+            top_score: goals,
+            top_moves,
             playing: true,
-            board: board_ptr,
+            board,
             undo_stack: UndoStack::new(),
+            solution,
+            solution_index: 0,
+            solution_tick: 0,
+            solution_playing: false,
         };
-
-        Array::destroy(&mut boxes);
-        Array::destroy(&mut goals);
-        Array::destroy(&mut walls);
 
         game_ptr
     }
@@ -88,43 +209,127 @@ impl Game {
             (*game).undo_stack = core::ptr::null_mut();
         }
 
+        Array::destroy(&mut (*game).solution);
+
         free(game);
     }
 }
 
-pub unsafe fn gen_board(
-    diff: Difficulty,
-) -> (Vector2, Array<Vector2>, Array<Vector2>, Array<Vector2>) {
-    let size = diff as i32;
-    let box_count = (size + 1) / 2;
-    let wall_count = if diff == Easy { (size + 1) / 2 } else { size };
+unsafe fn gen_board_and_solve(
+    size: Size,
+    difficulty: Difficulty,
+) -> (*mut Board, i32, i32, Array<Vector2>) {
+    loop {
+        let (player, mut boxes, mut goals, mut walls) = gen_board(size, difficulty);
+        let top_score = goals.count as i32;
+        let mut optimization_attempts = 0;
 
-    let (mut boxes, mut goals, mut walls, mut pool) =
-        (Array::new(), Array::new(), Array::new(), Array::new());
+        loop {
+            let mut solve_result = solve(
+                size as i32,
+                player,
+                boxes,
+                goals,
+                walls,
+                difficulty.max_solver_steps(),
+            );
 
-    for y in 0..size {
-        for x in 0..size {
-            append(&mut pool, Vector2::new(x, y));
+            if solve_result.solved
+                && difficulty.accepts_solver_steps(solve_result.explored)
+                && difficulty.accepts_pushes(size as i32, solve_result.pushes)
+                && difficulty.accepts_wall_count(size as i32, walls.count)
+            {
+                let board_ptr = malloc(size_of::<Board>());
+                *board_ptr = Board::new(size as i32, size as i32, player, boxes, goals, walls);
+
+                Array::destroy(&mut boxes);
+                Array::destroy(&mut goals);
+                Array::destroy(&mut walls);
+
+                return (board_ptr, top_score, solve_result.moves, solve_result.path);
+            }
+
+            if optimization_attempts >= difficulty.max_optimization_attempts() {
+                Array::destroy(&mut solve_result.path);
+                break;
+            }
+            optimization_attempts += 1;
+
+            let changed = if solve_result.solved {
+                if !difficulty.accepts_wall_count(size as i32, walls.count)
+                    || solve_result.pushes < difficulty.min_pushes(size as i32)
+                    || solve_result.explored < difficulty.min_solver_steps()
+                {
+                    increase_level_difficulty(size as i32, player, boxes, goals, &mut walls)
+                } else if solve_result.pushes > difficulty.max_pushes(size as i32)
+                    || solve_result.explored >= difficulty.max_solver_steps()
+                {
+                    decrease_level_difficulty(size as i32, difficulty, &mut walls)
+                } else {
+                    false
+                }
+            } else if solve_result.explored >= difficulty.max_solver_steps() {
+                decrease_level_difficulty(size as i32, difficulty, &mut walls)
+            } else {
+                false
+            };
+
+            Array::destroy(&mut solve_result.path);
+
+            if !changed {
+                break;
+            }
         }
+
+        Array::destroy(&mut boxes);
+        Array::destroy(&mut goals);
+        Array::destroy(&mut walls);
     }
+}
 
-    let player = pick_weighted(&mut pool, size, flat_weight);
+pub unsafe fn gen_board(
+    board_size: Size,
+    difficulty: Difficulty,
+) -> (Vector2, Array<Vector2>, Array<Vector2>, Array<Vector2>) {
+    loop {
+        let size = board_size as i32;
+        let box_count = difficulty.box_count(size);
+        let wall_count = difficulty.wall_count(size);
 
-    for _ in 0..wall_count {
-        append(&mut walls, pick_weighted(&mut pool, size, edge_weight));
+        let (mut boxes, mut goals, mut walls, mut pool) =
+            (Array::new(), Array::new(), Array::new(), Array::new());
+
+        for y in 0..size {
+            for x in 0..size {
+                append(&mut pool, Vector2::new(x, y));
+            }
+        }
+
+        let player = pick_weighted(&mut pool, size, flat_weight);
+
+        for _ in 0..wall_count {
+            append(&mut walls, pick_weighted(&mut pool, size, edge_weight));
+        }
+
+        for _ in 0..box_count {
+            append(&mut boxes, pick_weighted(&mut pool, size, center_weight));
+        }
+
+        for _ in 0..box_count {
+            append(&mut goals, pick_weighted(&mut pool, size, edge_weight));
+        }
+
+        Array::destroy(&mut pool);
+
+        if boxes_touch_wall_corner(boxes, walls) {
+            Array::destroy(&mut boxes);
+            Array::destroy(&mut goals);
+            Array::destroy(&mut walls);
+            continue;
+        }
+
+        return (player, boxes, goals, walls);
     }
-
-    for _ in 0..box_count {
-        append(&mut boxes, pick_weighted(&mut pool, size, center_weight));
-    }
-
-    for _ in 0..box_count {
-        append(&mut goals, pick_weighted(&mut pool, size, edge_weight));
-    }
-
-    Array::destroy(&mut pool);
-
-    (player, boxes, goals, walls)
 }
 
 unsafe fn random_index(max: usize) -> usize {
@@ -151,6 +356,16 @@ unsafe fn pick_weighted(
     for i in 0..(*pool).count {
         let pos = *(*pool).items.add(i);
         total_weight += clamp(weight_fn(pos, size), 0, size * size);
+    }
+
+    if total_weight == 0 {
+        let index = (rand() as usize) % (*pool).count;
+        let picked = *(*pool).items.add(index);
+        let last_index = (*pool).count - 1;
+        *(*pool).items.add(index) = *(*pool).items.add(last_index);
+        (*pool).count -= 1;
+
+        return picked;
     }
 
     let mut roll = rand() % total_weight;
@@ -225,43 +440,101 @@ unsafe fn center_weight(pos: Vector2, size: i32) -> i32 {
     w * w
 }
 
-unsafe fn shuffle(arr: *mut Array<Vector2>) {
-    if (*arr).count < 2 {
-        return;
+unsafe fn box_in_wall_corner(walls: Array<Vector2>, box_pos: Vector2) -> bool {
+    let left = Vector2::new(box_pos.x - 1, box_pos.y);
+    let right = Vector2::new(box_pos.x + 1, box_pos.y);
+    let up = Vector2::new(box_pos.x, box_pos.y - 1);
+    let down = Vector2::new(box_pos.x, box_pos.y + 1);
+
+    let top_left = has_pos(walls, left) && has_pos(walls, up);
+    let top_right = has_pos(walls, up) && has_pos(walls, right);
+    let bottom_right = has_pos(walls, right) && has_pos(walls, down);
+    let bottom_left = has_pos(walls, down) && has_pos(walls, left);
+
+    top_left || top_right || bottom_right || bottom_left
+}
+
+unsafe fn has_pos(arr: Array<Vector2>, pos: Vector2) -> bool {
+    for i in 0..arr.count {
+        let current = *arr.items.add(i);
+
+        if current.x == pos.x && current.y == pos.y {
+            return true;
+        }
     }
 
-    for i in 0..(*arr).count {
-        let remaining = (*arr).count - i;
-        let j = i + random_index(remaining);
+    false
+}
 
-        let a = (*arr).items.add(i);
-        let b = (*arr).items.add(j);
+unsafe fn boxes_touch_wall_corner(boxes: Array<Vector2>, walls: Array<Vector2>) -> bool {
+    for i in 0..boxes.count {
+        let box_pos = *boxes.items.add(i);
 
-        let tmp = *a;
-        *a = *b;
-        *b = tmp;
+        if box_in_wall_corner(walls, box_pos) {
+            return true;
+        }
     }
+
+    false
 }
 
-pub unsafe fn gen_boxes(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
-    append(arr, Vector2::new(1, 3));
-    append(arr, Vector2::new(3, 2));
-    append(arr, Vector2::new(3, 3));
-    return arr;
+unsafe fn increase_level_difficulty(
+    size: i32,
+    player: Vector2,
+    boxes: Array<Vector2>,
+    goals: Array<Vector2>,
+    walls: *mut Array<Vector2>,
+) -> bool {
+    let mut candidates: Array<Vector2> = Array::new();
+
+    for y in 0..size {
+        for x in 0..size {
+            let pos = Vector2::new(x, y);
+
+            if pos.x == player.x && pos.y == player.y {
+                continue;
+            }
+
+            if has_pos(*walls, pos) || has_pos(boxes, pos) || has_pos(goals, pos) {
+                continue;
+            }
+
+            append(&mut candidates, pos);
+        }
+    }
+
+    while candidates.count > 0 {
+        let wall = pick_weighted(&mut candidates, size, center_weight);
+        append(walls, wall);
+
+        if boxes_touch_wall_corner(boxes, *walls) {
+            pop(walls);
+            continue;
+        }
+
+        Array::destroy(&mut candidates);
+        return true;
+    }
+
+    Array::destroy(&mut candidates);
+    false
 }
 
-pub unsafe fn gen_goals(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
-    append(arr, Vector2::new(0, 2));
-    append(arr, Vector2::new(3, 4));
-    append(arr, Vector2::new(4, 3));
-    return arr;
-}
+unsafe fn decrease_level_difficulty(
+    size: i32,
+    difficulty: Difficulty,
+    walls: *mut Array<Vector2>,
+) -> bool {
+    if (*walls).count as i32 <= difficulty.min_wall_count(size) {
+        return false;
+    }
 
-pub unsafe fn gen_walls(arr: *mut Array<Vector2>) -> *mut Array<Vector2> {
-    append(arr, Vector2::new(0, 1));
-    append(arr, Vector2::new(0, 3));
-    append(arr, Vector2::new(0, 0));
-    return arr;
+    let index = (rand() as usize) % (*walls).count;
+    let last_index = (*walls).count - 1;
+    *(*walls).items.add(index) = *(*walls).items.add(last_index);
+    (*walls).count -= 1;
+
+    true
 }
 
 pub unsafe fn get_board(game: *mut Game) -> *mut Board {
@@ -477,6 +750,62 @@ pub unsafe fn undo_move(game: *mut Game) {
     (*game).playing = true;
 }
 
+pub unsafe fn restart_level(game: *mut Game) {
+    (*game).solution_playing = false;
+    (*game).solution_index = 0;
+    (*game).solution_tick = 0;
+
+    while (*get_undo_stack(game)).stack.count > 0 {
+        undo_move(game);
+    }
+
+    let cells = *get_cells(get_board(game));
+    (*game).score = check_score(cells);
+    (*game).playing = true;
+}
+
+pub unsafe fn play_solution(game: *mut Game) {
+    restart_level(game);
+
+    if (*game).solution.count == 0 {
+        return;
+    }
+
+    (*game).solution_playing = true;
+}
+
+pub unsafe fn step_solution(game: *mut Game) {
+    if !(*game).solution_playing {
+        return;
+    }
+
+    if (*game).solution_index >= (*game).solution.count {
+        (*game).solution_playing = false;
+        return;
+    }
+
+    (*game).solution_tick += 1;
+    if (*game).solution_tick < 8 {
+        return;
+    }
+    (*game).solution_tick = 0;
+
+    let delta = *(*game).solution.items.add((*game).solution_index);
+    (*game).solution_index += 1;
+
+    match Direction::from_delta(delta) {
+        Some(dir) => move_player(game, dir),
+        Option::None => {
+            (*game).solution_playing = false;
+            return;
+        }
+    }
+
+    if (*game).solution_index >= (*game).solution.count || !(*game).playing {
+        (*game).solution_playing = false;
+    }
+}
+
 unsafe fn check_score(cells: Cells) -> i32 {
     let mut score = 0;
     for r in 0..cells.count {
@@ -507,5 +836,22 @@ impl Direction {
             Direction::Up => Vector2::new(0, -1),
             Direction::Down => Vector2::new(0, 1),
         }
+    }
+
+    pub unsafe fn from_delta(delta: Vector2) -> Option<Direction> {
+        if delta.x == -1 && delta.y == 0 {
+            return Some(Direction::Left);
+        }
+        if delta.x == 1 && delta.y == 0 {
+            return Some(Direction::Right);
+        }
+        if delta.x == 0 && delta.y == -1 {
+            return Some(Direction::Up);
+        }
+        if delta.x == 0 && delta.y == 1 {
+            return Some(Direction::Down);
+        }
+
+        Option::None
     }
 }
